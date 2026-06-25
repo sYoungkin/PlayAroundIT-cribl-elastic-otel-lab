@@ -4,7 +4,7 @@
 #  PlayAroundIT Observability Lab - Status
 # ============================================
 
-VAGRANT_DIR="$(cd "$(dirname "$0")/../vagrant" && pwd)"
+VAGRANT_DIR="$(cd "$(dirname "$0")/../" && pwd)"
 
 if [ ! -f "$VAGRANT_DIR/Vagrantfile" ]; then
   echo "ERROR: Vagrantfile not found at $VAGRANT_DIR"

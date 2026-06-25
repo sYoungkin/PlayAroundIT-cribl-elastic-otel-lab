@@ -1,3 +1,5 @@
 .ssh/
 .vagrant/
 *.log
+certs/
+packages/
