@@ -1,0 +1,63 @@
+NV["VAGRANT_DEFAULT_PROVIDER"] = "vmware_desktop"
+Vagrant.require_version ">= 2.3.0"
+BOX_IMAGE = "generic/ubuntu2204"
+
+ELASTIC = 1
+KIBANA  = 1
+CRIBL   = 1
+APP   = 1
+
+Vagrant.configure("2") do |config|
+  config.vagrant.plugins = ["vagrant-vmware-desktop"]
+  config.vm.box = BOX_IMAGE
+  config.vm.provider "vmware_desktop" do |v|
+    v.cpus   = 1
+    v.memory = 1024
+  end
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+
+  # Elasticsearch nodes
+  (1..ELASTIC).each do |i|
+    config.vm.define "elastic-#{i}" do |subconfig|
+      subconfig.vm.hostname = "elastic-#{i}"
+      subconfig.vm.provision "shell",
+        path: "scripts/elastic.sh",
+        env: { "ADMIN_PWD" => "adminuser123!" }
+    end
+  end
+
+  # Kibana nodes
+  (1..KIBANA).each do |i|
+    config.vm.define "kibana-#{i}" do |subconfig|
+      subconfig.vm.provider "vmware_desktop" do |v|
+        v.cpus   = 2
+        v.memory = 4096
+      end
+      subconfig.vm.hostname = "kibana-#{i}"
+      subconfig.vm.provision "shell",
+        path: "scripts/kibana.sh",
+        env: { "ADMIN_PWD" => "adminuser123!" }
+    end
+  end
+
+  # Cribl nodes
+  (1..CRIBL).each do |i|
+    config.vm.define "cribl-#{i}" do |subconfig|
+      subconfig.vm.hostname = "cribl-#{i}"
+      subconfig.vm.provision "shell",
+        path: "scripts/cribl.sh",
+        env: { "ADMIN_PWD" => "adminuser123!" }
+    end
+  end
+
+  # App-server nodes
+  (1..APP).each do |i|
+    config.vm.define "app-#{i}" do |subconfig|
+      subconfig.vm.hostname = "app-#{i}"
+      subconfig.vm.provision "shell",
+        path: "scripts/app-server.sh",
+    end
+  end
+
+end
