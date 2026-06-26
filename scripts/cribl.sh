@@ -34,12 +34,12 @@ log "Extracting Cribl package to /opt..."
 tar zxf "$PKG_SRC" -C /opt/
 rm -f "$PKG_SRC"
 
-log "Parking lab certificates for later ES-destination config..."
+log "Parking lab certificates for later config..."
 mkdir -p "$CERT_DST"
-cp "$CERT_SRC/ca.crt"    "$CERT_DST/ca.crt"
-cp "$CERT_SRC/cribl.crt" "$CERT_DST/cribl.crt"
-cp "$CERT_SRC/cribl.key" "$CERT_DST/cribl.key"
-rm -f "$CERT_SRC/ca.crt" "$CERT_SRC/cribl.crt" "$CERT_SRC/cribl.key"
+cp "$CERT_SRC/ca.crt"          "$CERT_DST/ca.crt"
+cp "$CERT_SRC/cribl-chain.crt" "$CERT_DST/cribl-chain.crt"
+cp "$CERT_SRC/cribl.key"       "$CERT_DST/cribl.key"
+rm -f "$CERT_SRC/ca.crt" "$CERT_SRC/cribl-chain.crt" "$CERT_SRC/cribl.key"
 
 log "Setting ownership of ${CRIBL_HOME} to ${CRIBL_USER} (install+run as same user)..."
 chown -R "${CRIBL_USER}:${CRIBL_USER}" "$CRIBL_HOME"

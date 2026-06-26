@@ -4,8 +4,8 @@ Vagrant.require_version ">= 2.3.0"
 BOX_IMAGE = "generic/ubuntu2204"
 ELASTIC = 1
 KIBANA  = 1
-CRIBL   = 0
-APP     = 0
+CRIBL   = 1
+APP     = 1
 
 # --- Build /etc/hosts entries from the node counts ------------------
 # Single source of truth: the counts above drive both the VMs and the
@@ -115,7 +115,8 @@ Vagrant.configure("2") do |config|
     config.vm.define "app-#{i}" do |subconfig|
       subconfig.vm.hostname = "app-#{i}"
       subconfig.vm.network "private_network", ip: "192.168.65.4#{i}"
-
+      subconfig.vm.provision "file",
+        source: "certs/ca.crt", destination: "/tmp/ca.crt"
       subconfig.vm.provision "shell",
         path: "scripts/app-server.sh"
     end

@@ -35,7 +35,13 @@ log "Cleaning up apt cache..."
 apt-get autoremove -y
 apt-get clean
 
-VM_IP=$(hostname -I | awk '{print $1}')
+log "Staging lab CA certificate..."
+mkdir -p /etc/lab-certs
+cp /tmp/ca.crt /etc/lab-certs/ca.crt
+chmod 644 /etc/lab-certs/ca.crt
+rm -f /tmp/ca.crt
+
+VM_IP=$(ip -4 addr show | grep -oP '192\.168\.65\.\d+' | head -1)
 log "App server base configuration complete."
 log "Hostname: $(hostname)"
 log "IP:       ${VM_IP}"
