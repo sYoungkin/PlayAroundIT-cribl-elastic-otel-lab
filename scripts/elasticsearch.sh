@@ -57,13 +57,13 @@ apt-get install -y elasticsearch
 
 log "Installing our lab certificates..."
 mkdir -p "$CERT_DST"
-cp "$CERT_SRC/ca.crt"            "$CERT_DST/ca.crt"
-cp "$CERT_SRC/elasticsearch.crt" "$CERT_DST/elasticsearch.crt"
-cp "$CERT_SRC/elasticsearch.key" "$CERT_DST/elasticsearch.key"
+cp "$CERT_SRC/ca.crt"                  "$CERT_DST/ca.crt"
+cp "$CERT_SRC/elasticsearch-chain.crt" "$CERT_DST/elasticsearch-chain.crt"
+cp "$CERT_SRC/elasticsearch.key"       "$CERT_DST/elasticsearch.key"
 chown -R root:elasticsearch "$CERT_DST"
 chmod 750 "$CERT_DST"
 chmod 640 "$CERT_DST"/*
-rm -f "$CERT_SRC/ca.crt" "$CERT_SRC/elasticsearch.crt" "$CERT_SRC/elasticsearch.key"
+rm -f "$CERT_SRC/ca.crt" "$CERT_SRC/elasticsearch-chain.crt" "$CERT_SRC/elasticsearch.key"
 
 log "Resetting Elasticsearch keystore (clearing auto-config secrets)..."
 ES_KEYSTORE="/usr/share/elasticsearch/bin/elasticsearch-keystore"
@@ -88,7 +88,7 @@ xpack.security.enabled: true
 xpack.security.http.ssl:
   enabled: true
   key: certs/elasticsearch.key
-  certificate: certs/elasticsearch.crt
+  certificate: certs/elasticsearch-chain.crt
   certificate_authorities: certs/ca.crt
 EOF
 
@@ -113,7 +113,7 @@ HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
 [[ "$HTTP_CODE" == "200" ]] || fail "Failed to set kibana_system password (HTTP ${HTTP_CODE})"
 log "kibana_system password set."
 
-VM_IP=$(hostname -I | awk '{print $1}')
+VM_IP=$(ip -4 addr show | grep -oP '192\.168\.65\.\d+' | head -1)
 log "Elasticsearch installation complete."
 log "Elasticsearch: https://${VM_IP}:9200"
 log "Username:      ${ELASTIC_USER}"

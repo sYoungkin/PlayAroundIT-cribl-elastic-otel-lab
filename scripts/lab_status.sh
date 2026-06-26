@@ -31,7 +31,7 @@ for VM in $VMS; do
     | awk -F',' '{print $4}')
 
   if [ "$STATUS" = "running" ]; then
-    IP=$(vagrant ssh "$VM" -c "hostname -I | awk '{print \$1}'" 2>/dev/null | tr -d '\r')
+    IP=$(vagrant ssh "$VM" -c "ip -4 addr show | grep -oP '192\.168\.65\.\d+' | head -1" 2>/dev/null | tr -d '\r')
     printf "  %-14s %-18s %-10s\n" "$VM" "$IP" "running"
   else
     printf "  %-14s %-18s %-10s\n" "$VM" "---" "${STATUS:-unknown}"

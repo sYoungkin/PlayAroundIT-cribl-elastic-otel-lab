@@ -12,15 +12,18 @@ lessons learned getting there.
 A single Elasticsearch node (`elastic-1`) provisioned via Vagrant + VMware
 Workstation, running Ubuntu 22.04. Security is enabled with TLS on the HTTP
 layer, using a **custom lab Certificate Authority** rather than Elasticsearch's
-auto-generated certificates. The node is built to scale out later (additional
+auto-generated certificates. The node has a **static IP** (`192.168.65.11`) and
+serves a certificate carrying SANs for all tier node names + IPs, so clients can
+connect with **full TLS verification**. Built to scale out later (additional
 `elastic-N` nodes) by flipping `discovery.type` and adding transport TLS.
 
 | Property        | Value                          |
 |-----------------|--------------------------------|
 | Node name       | `elastic-1`                    |
+| Static IP       | `192.168.65.11`                |
 | Cluster name    | `cribl-elastic-otel-lab`       |
 | Version line    | Elastic 9.x (latest via apt)   |
-| HTTP endpoint   | `https://<vm-ip>:9200`         |
+| HTTP endpoint   | `https://elastic-1:9200`       |
 | Superuser       | `elastic`                      |
 | Security        | Enabled, HTTP TLS via lab CA   |
 | Discovery       | `single-node` (for now)        |
@@ -33,7 +36,7 @@ auto-generated certificates. The node is built to scale out later (additional
 
 Elasticsearch 9.x auto-configures TLS on first install, generating its own CA
 and node certificates. We deliberately **replace these** with our own lab CA
-(`PlayAroundIT-Lab-CA`) and per-service certificates.
+(`PlayAroundIT-Lab-CA`) and per-tier certificates.
 
 **Why:** a single, uniform CA across the whole environment means every future
 client — Kibana, Cribl, the Elastic Agent — only needs to trust **one**
@@ -44,7 +47,25 @@ integration simple.
 Certificates are generated **once** on the Windows host via
 `scripts/generate-certs.sh` (Git Bash + OpenSSL) and distributed to VMs during
 provisioning with Vagrant `file` provisioners. The `certs/` directory is
-**gitignored** — private keys never reach GitHub.
+**gitignored** — private keys never reach GitHub. See the certificate-generation
+doc for the SAN/chain design.
+
+### Serving the certificate chain (leaf + CA)
+
+ES is configured to present `elasticsearch-chain.crt` (leaf + CA concatenated),
+**not** the bare leaf. This matters because some clients — notably the Elastic
+Agent's `ca_trusted_fingerprint` method — require the server to present the
+issuing CA as part of the chain. A leaf-only server breaks that trust method.
+Presenting the full chain is also simply how production servers behave. See the
+Fleet doc for the debugging story that surfaced this.
+
+### SANs + static IP → full verification
+
+The `elasticsearch` cert carries SANs for the service name, every node name
+(`elastic-1/2/3`), `localhost`, and every tier IP (`192.168.65.11/12/13`,
+`127.0.0.1`). Combined with static IPs and a generated `/etc/hosts`, clients
+connect by node name (e.g. `https://elastic-1:9200`) with **full** hostname
+verification — no `verificationMode: certificate` workaround needed anymore.
 
 ### HTTP TLS only (no transport TLS yet)
 
@@ -87,25 +108,38 @@ The `elastic` password is set via keystore `bootstrap.password`; the
 2. Add the Elastic GPG key and 9.x apt repository.
 3. Install the `elasticsearch` package.
 4. Copy lab certs from `/tmp` into `/etc/elasticsearch/certs/` with correct
-   ownership (`root:elasticsearch`, `640`).
+   ownership (`root:elasticsearch`, `640`) — `ca.crt`,
+   `elasticsearch-chain.crt`, `elasticsearch.key`.
 5. Reset the keystore (clear auto-config secrets), add `bootstrap.password`.
-6. Write `elasticsearch.yml` (security on, HTTP TLS pointing at lab certs).
+6. Write `elasticsearch.yml` (security on, HTTP TLS pointing at the chain cert).
 7. **Fix runtime directory ownership** (see Lessons Learned).
 8. Enable + start the service, wait for the API to respond.
 9. Set the `kibana_system` password via the security API.
 10. Print the endpoint and credentials.
 
+### The TLS block in elasticsearch.yml
+
+```yaml
+xpack.security.http.ssl:
+  enabled: true
+  key: certs/elasticsearch.key
+  certificate: certs/elasticsearch-chain.crt
+  certificate_authorities: certs/ca.crt
+```
+
+Note `certificate:` points at the **chain** file.
+
 ### Certificate distribution (Vagrantfile)
 
 `file` provisioners run **before** the shell provisioner, staging certs in
-`/tmp` so the script can place them. Only `ca.crt` and the `elasticsearch.*`
-pair go to this node — the CA **key** and other services' certs never touch it.
+`/tmp` so the script can place them. Only `ca.crt`, the chain, and the key go to
+this node — the CA **key** and other tiers' certs never touch it.
 
 ```ruby
 subconfig.vm.provision "file",
   source: "certs/ca.crt", destination: "/tmp/ca.crt"
 subconfig.vm.provision "file",
-  source: "certs/elasticsearch.crt", destination: "/tmp/elasticsearch.crt"
+  source: "certs/elasticsearch-chain.crt", destination: "/tmp/elasticsearch-chain.crt"
 subconfig.vm.provision "file",
   source: "certs/elasticsearch.key", destination: "/tmp/elasticsearch.key"
 ```
@@ -131,7 +165,7 @@ curl -k -u elastic:adminuser123! https://localhost:9200
 ```
 
 Expect the JSON banner with `cluster_name: cribl-elastic-otel-lab`.
-(`-k` skips hostname verification — expected, our certs are CN-only.)
+(`-k` is fine here — this is a localhost self-check, not part of the trust model.)
 
 ### 3. Cluster health
 
@@ -142,42 +176,32 @@ curl -k -u elastic:adminuser123! https://localhost:9200/_cluster/health?pretty
 Single-node will report `green` or `yellow`. Yellow is normal — it just means
 unassigned replica shards, which can't be placed with only one node.
 
-### 4. Confirm OUR certificate is being served
+### 4. Confirm the chain is being served (expect 2 certs)
 
 ```bash
-echo | openssl s_client -connect localhost:9200 2>/dev/null \
-  | openssl x509 -noout -issuer -subject
+echo | openssl s_client -connect localhost:9200 -showcerts 2>/dev/null \
+  | grep -c "BEGIN CERTIFICATE"
 ```
 
-Expect:
-```
-issuer=...CN = PlayAroundIT-Lab-CA
-subject=...CN = elasticsearch
-```
+Expect `2` — leaf + CA. A `1` means the server is presenting leaf-only, which
+breaks the agent fingerprint trust method.
 
-This proves the cert swap worked and the auto-config certs are gone.
-
-### 5. Confirm the CA validates the certificate
+### 5. Full verification by node name (the payoff)
 
 ```bash
 curl --cacert /etc/elasticsearch/certs/ca.crt \
-  -u elastic:adminuser123! https://localhost:9200/_cluster/health?pretty
+  -u elastic:adminuser123! https://elastic-1:9200/_cluster/health?pretty
 ```
 
-**Expected result:** this *fails* with:
-```
-SSL: certificate subject name 'elasticsearch' does not match target host name 'localhost'
-```
+**Expected result:** this **succeeds** and returns cluster health — with full
+CA *and* hostname verification, no `-k`. This works because:
+- `elastic-1` is in the cert's SANs (so hostname verification passes), and
+- ES presents the chain, so the CA validates cleanly.
 
-This is the **correct** outcome and worth understanding: the CA **did**
-validate the certificate (no "unable to verify" error). It failed only on
-**hostname verification** — the cert's name (`elasticsearch`) doesn't match the
-host we connected to (`localhost`). Our certs have no Subject Alternative Names
-(SANs), so they're only valid for a host literally named `elasticsearch`.
-
-We handle this on the **client** side (Kibana) with
-`elasticsearch.ssl.verificationMode: certificate`, which keeps full CA trust
-but skips the hostname check. See the TLS note below.
+This is the payoff of the SAN + static-IP + chain redesign. (Previously, with
+CN-only certs, this same check *failed* on a hostname mismatch and we worked
+around it with `verificationMode: certificate`. That workaround is no longer
+needed.)
 
 ---
 
@@ -185,12 +209,12 @@ but skips the hostname check. See the TLS note below.
 
 The **client always verifies the server**, never the reverse:
 
-- **Elasticsearch is the server** — it *presents* its certificate.
-- **Kibana is the client** — it *verifies* that certificate, and decides how
-  strictly (full hostname check vs. certificate-only).
+- **Elasticsearch is the server** — it *presents* its certificate (chain).
+- **Kibana is the client** — it *verifies* that certificate. With proper SANs we
+  now use **full** verification (CA trust + hostname check).
 
-This is why `verificationMode: certificate` lives in **`kibana.yml`**, not in
-`elasticsearch.yml`. There's nothing to configure on the ES side for this.
+Verification strictness is configured on the **client** (`kibana.yml`), not in
+`elasticsearch.yml`. There's nothing to configure on the ES side for it.
 
 Two separate mechanisms are easy to conflate:
 
@@ -246,22 +270,20 @@ separators: `-subj "//C=DE\ST=Hesse\..."`. Do **not** set a global
 arguments (openssl then can't resolve `/d/...` paths). Escape per-argument
 instead.
 
-### Missing SANs → hostname verification fails
+### Two interfaces — pick the right IP
 
-Our certs carry only a CN, no SANs. Modern TLS checks the hostname against
-SANs, so the cert is only valid for the literal name `elasticsearch`. For the
-lab we accept this and use `verificationMode: certificate` on clients. The
-production-correct alternative is to regenerate certs with SANs covering all
-DNS names and IPs each node is reached by — deferred because VMware DHCP assigns
-IPs dynamically.
+Vagrant + VMware gives each VM **two NICs**: `eth0` (NAT, `192.168.248.x`, for
+internet + Vagrant SSH) and `eth1` (host-only, the static `192.168.65.x` lab
+IP). `hostname -I | awk '{print $1}'` returns the **NAT** IP first, which is the
+wrong one for lab output. Extract the lab IP explicitly instead:
+```bash
+VM_IP=$(ip -4 addr show | grep -oP '192\.168\.65\.\d+' | head -1)
+```
 
----
+### (Historical) Missing SANs → hostname verification failed
 
-## Next Steps
-
-- **Kibana** (`kibana-1`): install, distribute `ca.crt` + `kibana.*`, configure
-  connection to Elasticsearch using `kibana_system` + `verificationMode:
-  certificate`, then bootstrap from the running `elastic-1`.
-- **Scale-out** (later): pin the exact 9.x version, set up transport TLS,
-  switch `discovery.type: single-node` to proper `discovery.seed_hosts` /
-  `cluster.initial_master_nodes`.
+Earlier the certs were CN-only (no SANs), so full hostname verification failed
+and clients used `verificationMode: certificate` as a workaround. This was
+**resolved** by the redesign: static IPs let us generate per-tier certs with
+DNS + IP SANs, so full verification now works everywhere. Kept here as the
+backstory for why some older configs referenced `verificationMode: certificate`.

@@ -59,7 +59,7 @@ log "Starting Cribl..."
 systemctl daemon-reload
 systemctl start cribl
 
-VM_IP=$(hostname -I | awk '{print $1}')
+VM_IP=$(ip -4 addr show | grep -oP '192\.168\.65\.\d+' | head -1)
 log "Cribl Stream installation complete."
 log "Cribl UI: http://${VM_IP}:9000"
 log "Login:    admin / admin  (CHANGE THIS after first login)"
